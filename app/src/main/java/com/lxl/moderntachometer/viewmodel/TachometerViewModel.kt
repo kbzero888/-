@@ -23,9 +23,15 @@ data class TachometerUiState(
     val avgRpm: Int = 0,
     val sampleCount: Long = 0L,
 
+    // 实时转速栏目自定义展示开关
+    val showMaxRpm: Boolean = true,
+    val showMinRpm: Boolean = true,
+    val showAvgRpm: Boolean = true,
+    val showSampleCount: Boolean = true,
+
     // 校准设置
     val calibrationFactorText: String = "1.0",
-    val bladesPerRev: Int = 1, // 每转反光贴片数 (自动换算为 1/N 系数)
+    val bladesPerRev: Int = 1,
     val ignoreZeroRpm: Boolean = true,
 
     // 脉冲计数
@@ -85,6 +91,22 @@ class TachometerViewModel(application: Application) : AndroidViewModel(applicati
         if (_uiState.value.isConnected) {
             usbManager.scanAndConnect(newBaudRate)
         }
+    }
+
+    fun setShowMaxRpm(show: Boolean) {
+        _uiState.update { it.copy(showMaxRpm = show) }
+    }
+
+    fun setShowMinRpm(show: Boolean) {
+        _uiState.update { it.copy(showMinRpm = show) }
+    }
+
+    fun setShowAvgRpm(show: Boolean) {
+        _uiState.update { it.copy(showAvgRpm = show) }
+    }
+
+    fun setShowSampleCount(show: Boolean) {
+        _uiState.update { it.copy(showSampleCount = show) }
     }
 
     private fun handleIncomingFrame(frame: TachometerFrame) {

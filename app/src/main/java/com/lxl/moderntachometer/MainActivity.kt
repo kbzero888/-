@@ -3,16 +3,22 @@ package com.lxl.moderntachometer
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,8 +26,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -29,6 +39,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lxl.moderntachometer.viewmodel.TachometerUiState
 import com.lxl.moderntachometer.viewmodel.TachometerViewModel
 import java.util.Locale
+
+private enum class AppScreen {
+    Main,
+    Settings,
+    BaudRateSettings,
+    DisplaySettings
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,20 +75,74 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.surface
                 ) {
-                    TachometerScreen()
+                    TachometerApp()
                 }
             }
         }
     }
 }
 
+@Composable
+fun TachometerApp(viewModel: TachometerViewModel = viewModel()) {
+    val state by viewModel.uiState.collectAsState()
+    var currentScreen by remember { mutableStateOf(AppScreen.Main) }
+
+    BackHandler(enabled = currentScreen != AppScreen.Main) {
+        currentScreen = when (currentScreen) {
+            AppScreen.BaudRateSettings, AppScreen.DisplaySettings -> AppScreen.Settings
+            AppScreen.Settings -> AppScreen.Main
+            AppScreen.Main -> AppScreen.Main
+        }
+    }
+
+    when (currentScreen) {
+        AppScreen.Main -> {
+            MainDashboardScreen(
+                state = state,
+                viewModel = viewModel,
+                onOpenSettings = { currentScreen = AppScreen.Settings }
+            )
+        }
+        AppScreen.Settings -> {
+            SettingsScreen(
+                state = state,
+                onBack = { currentScreen = AppScreen.Main },
+                onOpenBaudRate = { currentScreen = AppScreen.BaudRateSettings },
+                onOpenDisplay = { currentScreen = AppScreen.DisplaySettings }
+            )
+        }
+        AppScreen.BaudRateSettings -> {
+            BaudRateSettingsScreen(
+                currentBaudRate = state.baudRate,
+                onSelectBaudRate = { viewModel.updateBaudRate(it) },
+                onBack = { currentScreen = AppScreen.Settings }
+            )
+        }
+        AppScreen.DisplaySettings -> {
+            DisplaySettingsScreen(
+                state = state,
+                viewModel = viewModel,
+                onBack = { currentScreen = AppScreen.Settings }
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TachometerScreen(viewModel: TachometerViewModel = viewModel()) {
-    val state by viewModel.uiState.collectAsState()
-    var showBaudDialog by remember { mutableStateOf(false) }
+fun MainDashboardScreen(
+    state: TachometerUiState,
+    viewModel: TachometerViewModel,
+    onOpenSettings: () -> Unit
+) {
+    val focusManager = LocalFocusManager.current
 
     Scaffold(
+        modifier = Modifier.pointerInput(Unit) {
+            detectTapGestures(onTap = {
+                focusManager.clearFocus()
+            })
+        },
         topBar = {
             TopAppBar(
                 title = {
@@ -98,11 +169,15 @@ fun TachometerScreen(viewModel: TachometerViewModel = viewModel()) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showBaudDialog = true }) {
-                        Icon(Icons.Rounded.Settings, contentDescription = "波特率设置")
+                    IconButton(onClick = {
+                        focusManager.clearFocus()
+                        onOpenSettings()
+                    }) {
+                        Icon(Icons.Rounded.Settings, contentDescription = "设置")
                     }
                     IconButton(
                         onClick = {
+                            focusManager.clearFocus()
                             if (state.isConnected) viewModel.disconnect() else viewModel.connectOrScan()
                         }
                     ) {
@@ -124,10 +199,13 @@ fun TachometerScreen(viewModel: TachometerViewModel = viewModel()) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 1. 核心转速与极值统计看板
+            // 1. 核心转速与自定义统计看板
             RpmDashboardCard(
                 state = state,
-                onResetStats = { viewModel.resetRpmStats() }
+                onResetStats = {
+                    focusManager.clearFocus()
+                    viewModel.resetRpmStats()
+                }
             )
 
             // 2. 校准与采样控制卡片
@@ -135,21 +213,32 @@ fun TachometerScreen(viewModel: TachometerViewModel = viewModel()) {
                 state = state,
                 onFactorChange = { viewModel.updateCalibrationFactor(it) },
                 onBladesChange = { viewModel.updateBladesPerRev(it) },
-                onIgnoreZeroChange = { viewModel.toggleIgnoreZero(it) }
+                onIgnoreZeroChange = { viewModel.toggleIgnoreZero(it) },
+                onClearFocus = { focusManager.clearFocus() }
             )
 
             // 3. 脉冲计数卡片
             PulseCounterCard(
                 state = state,
-                onDirectionChange = { viewModel.setCountDirection(it) },
-                onResetCount = { viewModel.resetHardwarePulseCount() }
+                onDirectionChange = {
+                    focusManager.clearFocus()
+                    viewModel.setCountDirection(it)
+                },
+                onResetCount = {
+                    focusManager.clearFocus()
+                    viewModel.resetHardwarePulseCount()
+                }
             )
 
             // 4. 线速度计算卡片
             LineSpeedCard(
                 state = state,
                 onDiameterChange = { viewModel.updateDiameter(it) },
-                onUnitChange = { viewModel.setLineSpeedUnit(it) }
+                onUnitChange = {
+                    focusManager.clearFocus()
+                    viewModel.setLineSpeedUnit(it)
+                },
+                onClearFocus = { focusManager.clearFocus() }
             )
 
             // 5. 近期读数流水
@@ -158,50 +247,320 @@ fun TachometerScreen(viewModel: TachometerViewModel = viewModel()) {
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
+}
 
-    if (showBaudDialog) {
-        val baudRates = listOf(9600, 19200, 38400, 57600, 115200, 230400)
-        AlertDialog(
-            onDismissRequest = { showBaudDialog = false },
-            title = { Text("串口波特率设置") },
-            text = {
-                Column {
-                    baudRates.forEach { baud ->
+// ==========================================
+// 第二界面：设置主界面
+// ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(
+    state: TachometerUiState,
+    onBack: () -> Unit,
+    onOpenBaudRate: () -> Unit,
+    onOpenDisplay: () -> Unit
+) {
+    val visibleItems = buildList {
+        if (state.showMaxRpm) add("最大值")
+        if (state.showMinRpm) add("最小值")
+        if (state.showAvgRpm) add("平均值")
+        if (state.showSampleCount) add("有效采样")
+    }
+    val displaySummary = if (visibleItems.isEmpty()) "已全部隐藏" else visibleItems.joinToString("、")
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("设置", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            SettingsMenuCard(
+                icon = Icons.Rounded.Speed,
+                title = "波特率修改",
+                subtitle = "当前串口速率: ${state.baudRate} bps",
+                onClick = onOpenBaudRate
+            )
+
+            SettingsMenuCard(
+                icon = Icons.Rounded.Visibility,
+                title = "转速数据显示修改",
+                subtitle = "当前展示: $displaySummary",
+                onClick = onOpenDisplay
+            )
+        }
+    }
+}
+
+@Composable
+fun SettingsMenuCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(26.dp)
+            )
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// ==========================================
+// 第三界面 A：波特率修改
+// ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BaudRateSettingsScreen(
+    currentBaudRate: Int,
+    onSelectBaudRate: (Int) -> Unit,
+    onBack: () -> Unit
+) {
+    val baudRates = listOf(9600, 19200, 38400, 57600, 115200, 230400)
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("波特率修改", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "选择与下位机硬件匹配的通信波特率（修改后若已连接将自动重连生效）：",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    baudRates.forEachIndexed { index, baud ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 4.dp),
+                                .clickable { onSelectBaudRate(baud) }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
-                                selected = state.baudRate == baud,
-                                onClick = {
-                                    viewModel.updateBaudRate(baud)
-                                    showBaudDialog = false
-                                }
+                                selected = currentBaudRate == baud,
+                                onClick = null
                             )
+                            Spacer(modifier = Modifier.width(12.dp))
                             Text(
                                 text = "$baud bps" + if (baud == 115200) " (默认)" else "",
-                                modifier = Modifier.padding(start = 8.dp)
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (currentBaudRate == baud) FontWeight.SemiBold else FontWeight.Normal
+                            )
+                        }
+                        if (index < baudRates.lastIndex) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(horizontal = 16.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                             )
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showBaudDialog = false }) {
-                    Text("关闭")
+            }
+        }
+    }
+}
+
+// ==========================================
+// 第三界面 B：转速数据显示修改
+// ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DisplaySettingsScreen(
+    state: TachometerUiState,
+    viewModel: TachometerViewModel,
+    onBack: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("转速数据显示修改", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "自定义主界面「实时转速 (RPM)」卡片底部需要展示的统计指标：",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    DisplayToggleRow(
+                        title = "最大值",
+                        description = "展示本次采样周期内的峰值最高转速",
+                        checked = state.showMaxRpm,
+                        onCheckedChange = { viewModel.setShowMaxRpm(it) }
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+                    DisplayToggleRow(
+                        title = "最小值",
+                        description = "展示本次采样周期内的谷值最低转速",
+                        checked = state.showMinRpm,
+                        onCheckedChange = { viewModel.setShowMinRpm(it) }
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+                    DisplayToggleRow(
+                        title = "平均值",
+                        description = "展示所有有效采样点的算术平均转速",
+                        checked = state.showAvgRpm,
+                        onCheckedChange = { viewModel.setShowAvgRpm(it) }
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+                    DisplayToggleRow(
+                        title = "有效采样",
+                        description = "展示累计参与统计的数据帧总次数",
+                        checked = state.showSampleCount,
+                        onCheckedChange = { viewModel.setShowSampleCount(it) }
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun DisplayToggleRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
         )
     }
 }
 
+// ==========================================
+// 主界面卡片组件
+// ==========================================
 @Composable
 fun RpmDashboardCard(
     state: TachometerUiState,
     onResetStats: () -> Unit
 ) {
+    val hasAnyStat = state.showMaxRpm || state.showMinRpm || state.showAvgRpm || state.showSampleCount
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -253,18 +612,32 @@ fun RpmDashboardCard(
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-            Spacer(modifier = Modifier.height(12.dp))
+            if (hasAnyStat) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                StatPill(label = "最大值", value = state.maxRpm.toString(), color = Color(0xFFE53935))
-                StatPill(label = "最小值", value = state.minRpm.toString(), color = Color(0xFF1E88E5))
-                StatPill(label = "平均值", value = state.avgRpm.toString(), color = Color(0xFF00897B))
-                StatPill(label = "有效采样", value = state.sampleCount.toString(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround
+                ) {
+                    if (state.showMaxRpm) {
+                        StatPill(label = "最大值", value = state.maxRpm.toString(), color = Color(0xFFE53935))
+                    }
+                    if (state.showMinRpm) {
+                        StatPill(label = "最小值", value = state.minRpm.toString(), color = Color(0xFF1E88E5))
+                    }
+                    if (state.showAvgRpm) {
+                        StatPill(label = "平均值", value = state.avgRpm.toString(), color = Color(0xFF00897B))
+                    }
+                    if (state.showSampleCount) {
+                        StatPill(
+                            label = "有效采样",
+                            value = state.sampleCount.toString(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
         }
     }
@@ -294,7 +667,8 @@ fun CalibrationCard(
     state: TachometerUiState,
     onFactorChange: (String) -> Unit,
     onBladesChange: (Int) -> Unit,
-    onIgnoreZeroChange: (Boolean) -> Unit
+    onIgnoreZeroChange: (Boolean) -> Unit,
+    onClearFocus: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -329,7 +703,13 @@ fun CalibrationCard(
                     onValueChange = onFactorChange,
                     label = { Text("倍率系数 K", fontSize = 12.sp) },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = { onClearFocus() }
+                    ),
                     modifier = Modifier.weight(1f)
                 )
 
@@ -339,7 +719,10 @@ fun CalibrationCard(
                 ) {
                     Text("反光贴/叶片数", style = MaterialTheme.typography.labelSmall)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { onBladesChange(state.bladesPerRev - 1) }) {
+                        IconButton(onClick = {
+                            onClearFocus()
+                            onBladesChange(state.bladesPerRev - 1)
+                        }) {
                             Icon(Icons.Rounded.RemoveCircleOutline, contentDescription = "减少")
                         }
                         Text(
@@ -348,7 +731,10 @@ fun CalibrationCard(
                             fontFamily = FontFamily.Monospace,
                             fontSize = 16.sp
                         )
-                        IconButton(onClick = { onBladesChange(state.bladesPerRev + 1) }) {
+                        IconButton(onClick = {
+                            onClearFocus()
+                            onBladesChange(state.bladesPerRev + 1)
+                        }) {
                             Icon(Icons.Rounded.AddCircleOutline, contentDescription = "增加")
                         }
                     }
@@ -358,18 +744,23 @@ fun CalibrationCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                    .padding(top = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "忽略 0 转速（防止停转拉低均值与最小值）",
+                    text = "忽略0转速(防止停转拉低均值与最小值)",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 10.dp)
                 )
                 Switch(
                     checked = state.ignoreZeroRpm,
-                    onCheckedChange = onIgnoreZeroChange
+                    onCheckedChange = {
+                        onClearFocus()
+                        onIgnoreZeroChange(it)
+                    }
                 )
             }
         }
@@ -439,7 +830,8 @@ fun PulseCounterCard(
 fun LineSpeedCard(
     state: TachometerUiState,
     onDiameterChange: (String) -> Unit,
-    onUnitChange: (Boolean) -> Unit
+    onUnitChange: (Boolean) -> Unit,
+    onClearFocus: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -485,7 +877,13 @@ fun LineSpeedCard(
                     onValueChange = onDiameterChange,
                     label = { Text("旋转体直径 (mm)", fontSize = 12.sp) },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Decimal,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = { onClearFocus() }
+                    ),
                     modifier = Modifier.weight(1f)
                 )
 

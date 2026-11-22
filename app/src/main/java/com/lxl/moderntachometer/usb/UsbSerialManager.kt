@@ -170,7 +170,6 @@ class UsbSerialManager(
     }
 
     override fun onNewData(data: ByteArray) {
-        // 每帧 11 字节，兼容单次读出多帧或单帧的情况
         var offset = 0
         while (offset + 11 <= data.size) {
             val slice = data.copyOfRange(offset, offset + 11)
